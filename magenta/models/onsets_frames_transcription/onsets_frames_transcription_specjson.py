@@ -1,10 +1,10 @@
-# Copyright 2018 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,13 +23,11 @@ from __future__ import print_function
 
 import json
 
-import tensorflow as tf
-
 from magenta.common import tf_utils
 from magenta.models.onsets_frames_transcription import constants
 from magenta.models.onsets_frames_transcription import data
 from magenta.models.onsets_frames_transcription import model
-
+import tensorflow as tf
 
 FLAGS = tf.app.flags.FLAGS
 

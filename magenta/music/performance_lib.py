@@ -1,16 +1,17 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Utility functions for working with polyphonic performances."""
 
 from __future__ import division
@@ -19,13 +20,12 @@ import abc
 import collections
 import math
 
-import tensorflow as tf
-
 from magenta.music import constants
 from magenta.music import events_lib
 from magenta.music import sequences_lib
 from magenta.pipelines import statistics
 from magenta.protobuf import music_pb2
+import tensorflow as tf
 
 MAX_MIDI_PITCH = constants.MAX_MIDI_PITCH
 MIN_MIDI_PITCH = constants.MIN_MIDI_PITCH
@@ -58,8 +58,7 @@ class PerformanceEvent(object):
   DURATION = 5
 
   def __init__(self, event_type, event_value):
-    if (event_type == PerformanceEvent.NOTE_ON or
-        event_type == PerformanceEvent.NOTE_OFF):
+    if event_type in (PerformanceEvent.NOTE_ON, PerformanceEvent.NOTE_OFF):
       if not MIN_MIDI_PITCH <= event_value <= MAX_MIDI_PITCH:
         raise ValueError('Invalid pitch value: %s' % event_value)
     elif event_type == PerformanceEvent.TIME_SHIFT:
@@ -392,8 +391,8 @@ class BasePerformance(events_lib.EventSequence):
                                event_value=current_velocity_bin))
 
       # Add a performance event for this note on/off.
-      event_type = (PerformanceEvent.NOTE_OFF if is_offset
-                    else PerformanceEvent.NOTE_ON)
+      event_type = (
+          PerformanceEvent.NOTE_OFF if is_offset else PerformanceEvent.NOTE_ON)
       performance_events.append(
           PerformanceEvent(event_type=event_type,
                            event_value=sorted_notes[idx].pitch))
@@ -692,15 +691,15 @@ class MetricPerformance(BasePerformance):
     return sequence
 
 
-class NotePerformanceException(Exception):
+class NotePerformanceError(Exception):
   pass
 
 
-class NotePerformanceTooManyTimeShiftSteps(NotePerformanceException):
+class TooManyTimeShiftStepsError(NotePerformanceError):
   pass
 
 
-class NotePerformanceTooManyDurationSteps(NotePerformanceException):
+class TooManyDurationStepsError(NotePerformanceError):
   pass
 
 
@@ -820,9 +819,9 @@ class NotePerformance(BasePerformance):
       A list of events.
 
     Raises:
-      NotePerformanceTooManyTimeShiftSteps: If the maximum number of time
+      TooManyTimeShiftStepsError: If the maximum number of time
         shift steps is exceeded.
-      NotePerformanceTooManyDurationSteps: If the maximum number of duration
+      TooManyDurationStepsError: If the maximum number of duration
         shift steps is exceeded.
     """
     notes = [note for note in quantized_sequence.notes
@@ -839,7 +838,7 @@ class NotePerformance(BasePerformance):
       # TIME_SHIFT
       time_shift_steps = note.quantized_start_step - current_step
       if time_shift_steps > self._max_shift_steps:
-        raise NotePerformanceTooManyTimeShiftSteps(
+        raise TooManyTimeShiftStepsError(
             'Too many steps for timeshift: %d' % time_shift_steps)
       else:
         sub_events.append(
@@ -861,7 +860,7 @@ class NotePerformance(BasePerformance):
       # DURATION
       duration_steps = note.quantized_end_step - note.quantized_start_step
       if duration_steps > self._max_duration_steps:
-        raise NotePerformanceTooManyDurationSteps(
+        raise TooManyDurationStepsError(
             'Too many steps for duration: %s' % note)
       sub_events.append(
           PerformanceEvent(event_type=PerformanceEvent.DURATION,
@@ -947,12 +946,12 @@ def extract_performances(
   """
   sequences_lib.assert_is_quantized_sequence(quantized_sequence)
 
-  stats = dict([(stat_name, statistics.Counter(stat_name)) for stat_name in
-                ['performances_discarded_too_short',
-                 'performances_truncated', 'performances_truncated_timewise',
-                 'performances_discarded_more_than_1_program',
-                 'performance_discarded_too_many_time_shift_steps',
-                 'performance_discarded_too_many_duration_steps']])
+  stats = dict((stat_name, statistics.Counter(stat_name)) for stat_name in
+               ['performances_discarded_too_short',
+                'performances_truncated', 'performances_truncated_timewise',
+                'performances_discarded_more_than_1_program',
+                'performance_discarded_too_many_time_shift_steps',
+                'performance_discarded_too_many_duration_steps'])
 
   if sequences_lib.is_absolute_quantized_sequence(quantized_sequence):
     steps_per_second = quantized_sequence.quantization_info.steps_per_second
@@ -989,10 +988,10 @@ def extract_performances(
         performance = NotePerformance(
             quantized_sequence, start_step=start_step,
             num_velocity_bins=num_velocity_bins, instrument=instrument)
-      except NotePerformanceTooManyTimeShiftSteps:
+      except TooManyTimeShiftStepsError:
         stats['performance_discarded_too_many_time_shift_steps'].increment()
         continue
-      except NotePerformanceTooManyDurationSteps:
+      except TooManyDurationStepsError:
         stats['performance_discarded_too_many_duration_steps'].increment()
         continue
     elif sequences_lib.is_absolute_quantized_sequence(quantized_sequence):

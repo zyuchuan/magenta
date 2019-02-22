@@ -1,10 +1,10 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,24 +18,21 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from . import constants
-
+from magenta.models.onsets_frames_transcription import constants
+from magenta.music import sequences_lib
 import mir_eval
 import numpy as np
 import pretty_midi
 import tensorflow as tf
 
-from magenta.music import sequences_lib
-from magenta.protobuf import music_pb2
-
 
 def sequence_to_valued_intervals(note_sequence,
-                                 min_duration_ms,
                                  min_midi_pitch=constants.MIN_MIDI_PITCH,
                                  max_midi_pitch=constants.MAX_MIDI_PITCH):
   """Convert a NoteSequence to valued intervals."""
   intervals = []
   pitches = []
+  velocities = []
 
   for note in note_sequence.notes:
     if note.pitch < min_midi_pitch or note.pitch > max_midi_pitch:
@@ -43,16 +40,11 @@ def sequence_to_valued_intervals(note_sequence,
     # mir_eval does not allow notes that start and end at the same time.
     if note.end_time == note.start_time:
       continue
-    if (note.end_time - note.start_time) * 1000 >= min_duration_ms:
-      intervals.append((note.start_time, note.end_time))
-      pitches.append(note.pitch)
+    intervals.append((note.start_time, note.end_time))
+    pitches.append(note.pitch)
+    velocities.append(note.velocity)
 
-  return np.array(intervals), np.array(pitches)
-
-
-def safe_log(value):
-  """Lower bounded log function."""
-  return np.log(1e-6 + value)
+  return np.array(intervals), np.array(pitches), np.array(velocities)
 
 
 def f1_score(precision, recall):
@@ -87,7 +79,7 @@ def accuracy_without_true_negatives(true_positives, false_positives,
       true_positives / (true_positives + false_positives + false_negatives), 0)
 
 
-def _frame_metrics(frame_labels, frame_predictions):
+def frame_metrics(frame_labels, frame_predictions):
   """Calculate frame-based metrics."""
   frame_labels_bool = tf.cast(frame_labels, tf.bool)
   frame_predictions_bool = tf.cast(frame_predictions, tf.bool)
@@ -131,6 +123,7 @@ def _frame_metrics(frame_labels, frame_predictions):
 
 
 def define_metrics(num_dims):
+  """Defines and creates metrics for inference."""
   with tf.variable_scope('metrics'):
     metric_frame_labels = tf.placeholder(
         tf.int32, (None, num_dims), name='metric_frame_labels')
@@ -148,8 +141,14 @@ def define_metrics(num_dims):
         tf.float32, (), name='metric_note_recall_with_offsets')
     metric_note_f1_with_offsets = tf.placeholder(
         tf.float32, (), name='metric_note_f1_with_offsets')
+    metric_note_precision_with_offsets_velocity = tf.placeholder(
+        tf.float32, (), name='metric_note_precision_with_offsets_velocity')
+    metric_note_recall_with_offsets_velocity = tf.placeholder(
+        tf.float32, (), name='metric_note_recall_with_offsets_velocity')
+    metric_note_f1_with_offsets_velocity = tf.placeholder(
+        tf.float32, (), name='metric_note_f1_with_offsets_velocity')
 
-    frame = _frame_metrics(metric_frame_labels, metric_frame_predictions)
+    frame = frame_metrics(metric_frame_labels, metric_frame_predictions)
 
     metrics_to_values, metrics_to_updates = (
         tf.contrib.metrics.aggregate_metric_map({
@@ -165,10 +164,20 @@ def define_metrics(num_dims):
                 tf.metrics.mean(metric_note_recall_with_offsets),
             'metrics/note_f1_score_with_offsets':
                 tf.metrics.mean(metric_note_f1_with_offsets),
-            'metrics/frame_precision': tf.metrics.mean(frame['precision']),
-            'metrics/frame_recall': tf.metrics.mean(frame['recall']),
-            'metrics/frame_f1_score': tf.metrics.mean(frame['f1_score']),
-            'metrics/frame_accuracy': tf.metrics.mean(frame['accuracy']),
+            'metrics/note_precision_with_offsets_velocity':
+                tf.metrics.mean(metric_note_precision_with_offsets_velocity),
+            'metrics/note_recall_with_offsets_velocity':
+                tf.metrics.mean(metric_note_recall_with_offsets_velocity),
+            'metrics/note_f1_score_with_offsets_velocity':
+                tf.metrics.mean(metric_note_f1_with_offsets_velocity),
+            'metrics/frame_precision':
+                tf.metrics.mean(frame['precision']),
+            'metrics/frame_recall':
+                tf.metrics.mean(frame['recall']),
+            'metrics/frame_f1_score':
+                tf.metrics.mean(frame['f1_score']),
+            'metrics/frame_accuracy':
+                tf.metrics.mean(frame['accuracy']),
             'metrics/frame_true_positives':
                 tf.metrics.mean(frame['true_positives']),
             'metrics/frame_false_positives':
@@ -179,33 +188,34 @@ def define_metrics(num_dims):
                 tf.metrics.mean(frame['accuracy_without_true_negatives']),
         }))
 
-    for metric_name, metric_value in metrics_to_values.iteritems():
+    for metric_name, metric_value in metrics_to_values.items():
       tf.summary.scalar(metric_name, metric_value)
 
     return (metrics_to_updates, metric_note_precision, metric_note_recall,
             metric_note_f1, metric_note_precision_with_offsets,
             metric_note_recall_with_offsets, metric_note_f1_with_offsets,
-            metric_frame_labels, metric_frame_predictions)
+            metric_note_precision_with_offsets_velocity,
+            metric_note_recall_with_offsets_velocity,
+            metric_note_f1_with_offsets_velocity, metric_frame_labels,
+            metric_frame_predictions)
 
 
 def score_sequence(session, global_step_increment, summary_op, summary_writer,
                    metrics_to_updates, metric_note_precision,
                    metric_note_recall, metric_note_f1,
                    metric_note_precision_with_offsets,
-                   metric_note_recall_with_offsets,
-                   metric_note_f1_with_offsets, metric_frame_labels,
+                   metric_note_recall_with_offsets, metric_note_f1_with_offsets,
+                   metric_note_precision_with_offsets_velocity,
+                   metric_note_recall_with_offsets_velocity,
+                   metric_note_f1_with_offsets_velocity, metric_frame_labels,
                    metric_frame_predictions, frame_labels, sequence_prediction,
-                   frames_per_second, note_sequence_str_label, min_duration_ms,
-                   sequence_id):
+                   frames_per_second, sequence_label, sequence_id):
   """Calculate metrics on the inferred sequence."""
-  est_intervals, est_pitches = sequence_to_valued_intervals(
-      sequence_prediction,
-      min_duration_ms=min_duration_ms)
+  est_intervals, est_pitches, est_velocities = sequence_to_valued_intervals(
+      sequence_prediction)
 
-  sequence_label = music_pb2.NoteSequence.FromString(note_sequence_str_label)
-  ref_intervals, ref_pitches = sequence_to_valued_intervals(
-      sequence_label,
-      min_duration_ms=min_duration_ms)
+  ref_intervals, ref_pitches, ref_velocities = sequence_to_valued_intervals(
+      sequence_label)
 
   sequence_note_precision, sequence_note_recall, sequence_note_f1, _ = (
       mir_eval.transcription.precision_recall_f1_overlap(
@@ -224,6 +234,17 @@ def score_sequence(session, global_step_increment, summary_op, summary_writer,
            est_intervals,
            pretty_midi.note_number_to_hz(est_pitches)))
 
+  (sequence_note_precision_with_offsets_velocity,
+   sequence_note_recall_with_offsets_velocity,
+   sequence_note_f1_with_offsets_velocity, _) = (
+       mir_eval.transcription_velocity.precision_recall_f1_overlap(
+           ref_intervals=ref_intervals,
+           ref_pitches=pretty_midi.note_number_to_hz(ref_pitches),
+           ref_velocities=ref_velocities,
+           est_intervals=est_intervals,
+           est_pitches=pretty_midi.note_number_to_hz(est_pitches),
+           est_velocities=est_velocities))
+
   frame_predictions = sequences_lib.sequence_to_pianoroll(
       sequence_prediction,
       frames_per_second=frames_per_second,
@@ -239,16 +260,31 @@ def score_sequence(session, global_step_increment, summary_op, summary_writer,
     # Truncate transcribed frames.
     frame_predictions = frame_predictions[:frame_labels.shape[0], :]
 
-  global_step, _ = session.run([global_step_increment, metrics_to_updates], {
-      metric_frame_predictions: frame_predictions,
-      metric_frame_labels: frame_labels,
-      metric_note_precision: sequence_note_precision,
-      metric_note_recall: sequence_note_recall,
-      metric_note_f1: sequence_note_f1,
-      metric_note_precision_with_offsets: sequence_note_precision_with_offsets,
-      metric_note_recall_with_offsets: sequence_note_recall_with_offsets,
-      metric_note_f1_with_offsets: sequence_note_f1_with_offsets
-  })
+  global_step, _ = session.run(
+      [global_step_increment, metrics_to_updates], {
+          metric_frame_predictions:
+              frame_predictions,
+          metric_frame_labels:
+              frame_labels,
+          metric_note_precision:
+              sequence_note_precision,
+          metric_note_recall:
+              sequence_note_recall,
+          metric_note_f1:
+              sequence_note_f1,
+          metric_note_precision_with_offsets:
+              sequence_note_precision_with_offsets,
+          metric_note_recall_with_offsets:
+              sequence_note_recall_with_offsets,
+          metric_note_f1_with_offsets:
+              sequence_note_f1_with_offsets,
+          metric_note_precision_with_offsets_velocity:
+              sequence_note_precision_with_offsets_velocity,
+          metric_note_recall_with_offsets_velocity:
+              sequence_note_recall_with_offsets_velocity,
+          metric_note_f1_with_offsets_velocity:
+              sequence_note_f1_with_offsets_velocity,
+      })
   # Running the summary op separately ensures that all of the metrics have been
   # updated before we try to query them.
   summary = session.run(summary_op)

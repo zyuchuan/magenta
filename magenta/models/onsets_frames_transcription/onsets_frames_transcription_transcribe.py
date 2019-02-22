@@ -1,10 +1,10 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,8 +22,6 @@ import collections
 import os
 
 import librosa
-import tensorflow as tf
-
 from magenta.common import tf_utils
 from magenta.models.onsets_frames_transcription import constants
 from magenta.models.onsets_frames_transcription import data
@@ -32,7 +30,7 @@ from magenta.music import audio_io
 from magenta.music import midi_io
 from magenta.music import sequences_lib
 from magenta.protobuf import music_pb2
-
+import tensorflow as tf
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -45,7 +43,7 @@ tf.app.flags.DEFINE_string(
     'checkpoint')
 tf.app.flags.DEFINE_string(
     'hparams',
-    'onset_mode=length_ms,onset_length=32',
+    '',
     'A comma-separated list of `name=value` hyperparameter values.')
 tf.app.flags.DEFINE_float(
     'frame_threshold', 0.5,
@@ -61,9 +59,10 @@ tf.app.flags.DEFINE_string(
 
 def create_example(filename, hparams):
   """Processes an audio file into an Example proto."""
-  wav_data = audio_io.samples_to_wav_data(
-      librosa.util.normalize(librosa.core.load(
-          filename, sr=hparams.sample_rate)[0]), hparams.sample_rate)
+  wav_data = librosa.core.load(filename, sr=hparams.sample_rate)[0]
+  if hparams.normalize_audio:
+    audio_io.normalize_wav_data(wav_data, hparams.sample_rate)
+  wav_data = audio_io.samples_to_wav_data(wav_data, hparams.sample_rate)
 
   example = tf.train.Example(features=tf.train.Features(feature={
       'id':
@@ -97,6 +96,8 @@ def initialize_session(acoustic_checkpoint, hparams):
   """Initializes a transcription session."""
   with tf.Graph().as_default():
     examples = tf.placeholder(tf.string, [None])
+
+    hparams.batch_size = 1
 
     batch, iterator = data.provide_batch(
         batch_size=1,
@@ -152,6 +153,7 @@ def transcribe_audio(transcription_session, filename, frame_threshold,
       frames_per_second=data.hparams_frames_per_second(
           transcription_session.hparams),
       min_duration_ms=0,
+      min_midi_pitch=constants.MIN_MIDI_PITCH,
       onset_predictions=onset_predictions,
       velocity_values=velocity_values)
 
@@ -171,6 +173,8 @@ def main(argv):
 
   hparams = tf_utils.merge_hparams(
       constants.DEFAULT_HPARAMS, model.get_default_hparams())
+  # For this script, default to not using cudnn.
+  hparams.use_cudnn = False
   hparams.parse(FLAGS.hparams)
 
   transcription_session = initialize_session(acoustic_checkpoint, hparams)
